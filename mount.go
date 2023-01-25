@@ -109,14 +109,28 @@ func doMount(args *argContainer) {
 			}
 		}()
 	}
-	// Initialize gocryptfs (read config file, ask for password, ...)
-	fs, wipeKeys := initFuseFrontend(args)
-	// Try to wipe secret keys from memory after unmount
-	defer wipeKeys()
-	// Initialize go-fuse FUSE server
-	srv := initGoFuse(fs, args)
-	if x, ok := fs.(AfterUnmounter); ok {
-		defer x.AfterUnmount()
+	var fs fs.InodeEmbedder
+	var srv *fuse.Server
+	var conf []byte
+	var wipeKeys func()
+	if args.apptainer {
+		fs, wipeKeys, conf = initFuseFrontendApptainer(args)
+		defer wipeKeys()
+		srv = initGoFuse(fs, args)
+		if x, ok := fs.(AfterUnmounter); ok {
+			defer x.AfterUnmount()
+		}
+		tlog.Debug.Printf("conf info, %s", conf)
+	} else {
+		// Initialize gocryptfs (read config file, ask for password, ...)
+		fs, wipeKeys := initFuseFrontend(args)
+		// Try to wipe secret keys from memory after unmount
+		defer wipeKeys()
+		// Initialize go-fuse FUSE server
+		srv = initGoFuse(fs, args)
+		if x, ok := fs.(AfterUnmounter); ok {
+			defer x.AfterUnmount()
+		}
 	}
 
 	tlog.Info.Println(tlog.ColorGreen + "Filesystem mounted and ready." + tlog.ColorReset)
