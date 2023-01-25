@@ -3,6 +3,8 @@ github.com/aperturerobotics/jacobsa-crypto v1.0.0 h1:ARfIuzgovK+5leAKbFHcicKEgMz
 github.com/aperturerobotics/jacobsa-crypto v1.0.0/go.mod h1:xq0oOkHSPQ1E5ByqbwLhCJ1mygYHtXTMQnvHD4tz4Cc=
 github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/google/uuid v1.3.0 h1:t6JiXgmwXMjEs8VusXIJk2BXHsn+wx8BZdTaoZ5fu7I=
+github.com/google/uuid v1.3.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/hanwen/go-fuse/v2 v2.1.1-0.20221117175120-915cf5413cde h1:fgTauqHA48CDt+qVQR+PJXqiI9bpYQglMIIi+h/mMts=
 github.com/hanwen/go-fuse/v2 v2.1.1-0.20221117175120-915cf5413cde/go.mod h1:B1nGE/6RBFyBRC1RRnf23UpwCdyJ31eukw34oAKukAc=
 github.com/jacobsa/oglematchers v0.0.0-20150720000706-141901ea67cd h1:9GCSedGjMcLZCrusBZuo4tyKLpKUPenUUqi34AkuFmA=

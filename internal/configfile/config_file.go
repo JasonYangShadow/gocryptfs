@@ -6,9 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"syscall"
-
 	"os"
+	"syscall"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
@@ -59,6 +58,9 @@ type ConfFile struct {
 	LongNameMax uint8 `json:",omitempty"`
 	// Filename is the name of the config file. Not exported to JSON.
 	filename string
+	// password
+	Password  []byte
+	MasterKey []byte
 }
 
 // CreateArgs exists because the argument list to Create became too long.
@@ -80,6 +82,29 @@ type CreateArgs struct {
 // "Password" and write it to "Filename".
 // Uses scrypt with cost parameter "LogN".
 func Create(args *CreateArgs) error {
+	cf, err := createConf(args)
+	if err != nil {
+		return err
+	}
+
+	// for original mode, we will also clean master key
+	for i := range cf.MasterKey {
+		cf.MasterKey[i] = 0
+	}
+	// Write file to disk
+	return cf.WriteFile()
+}
+
+func CreateConf(args *CreateArgs) (*ConfFile, error) {
+	cf, err := createConf(args)
+	if err != nil {
+		return nil, err
+	}
+	cf.Password = args.Password
+	return cf, nil
+}
+
+func createConf(args *CreateArgs) (*ConfFile, error) {
 	cf := ConfFile{
 		filename: args.Filename,
 		Creator:  args.Creator,
@@ -123,11 +148,12 @@ func Create(args *CreateArgs) error {
 	// Catch bugs and invalid cli flag combinations early
 	cf.ScryptObject = NewScryptKDF(args.LogN)
 	if err := cf.Validate(); err != nil {
-		return err
+		return nil, err
 	}
 	{
 		// Generate new random master key
 		key := cryptocore.RandBytes(cryptocore.KeyLen)
+		_ = copy(cf.MasterKey, key)
 		tlog.PrintMasterkeyReminder(key)
 		// Encrypt it using the password
 		// This sets ScryptObject and EncryptedKey
@@ -138,8 +164,8 @@ func Create(args *CreateArgs) error {
 		}
 		// key runs out of scope here
 	}
-	// Write file to disk
-	return cf.WriteFile()
+
+	return &cf, nil
 }
 
 // LoadAndDecrypt - read config file from disk and decrypt the

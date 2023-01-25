@@ -1,11 +1,6 @@
 package main
 
 import (
-	// Should be initialized before anything else.
-	// This import line MUST be in the alphabetically first source code file of
-	// package main!
-	_ "github.com/rfjakob/gocryptfs/v2/internal/ensurefds012"
-
 	"fmt"
 	"net"
 	"os"
@@ -13,6 +8,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	// Should be initialized before anything else.
+	// This import line MUST be in the alphabetically first source code file of
+	// package main!
+	_ "github.com/rfjakob/gocryptfs/v2/internal/ensurefds012"
 
 	flag "github.com/spf13/pflag"
 
@@ -56,6 +56,11 @@ type argContainer struct {
 	_forceOwner *fuse.Owner
 	// _explicitScryptn is true then the user passed "-scryptn=xyz"
 	_explicitScryptn bool
+
+	// apptainer specific flags
+	apptainer   bool
+	offset      uint64
+	limitedSize uint64
 }
 
 var flagSet *flag.FlagSet
@@ -197,6 +202,7 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.ro, "ro", false, "Mount the filesystem read-only")
 	flagSet.BoolVar(&args.kernel_cache, "kernel_cache", false, "Enable the FUSE kernel_cache option")
 	flagSet.BoolVar(&args.acl, "acl", false, "Enforce ACLs")
+	flagSet.BoolVar(&args.apptainer, "apptainer", true, "apptainer enabled by default")
 
 	flagSet.StringVar(&args.masterkey, "masterkey", "", "Mount with explicit master key")
 	flagSet.StringVar(&args.cpuprofile, "cpuprofile", "", "Write cpu profile to specified file")
@@ -232,6 +238,9 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.DurationVar(&args.idle, "i", 0, "Alias for -idle")
 	flagSet.DurationVar(&args.idle, "idle", 0, "Auto-unmount after specified idle duration (ignored in reverse mode). "+
 		"Durations are specified like \"500s\" or \"2h45m\". 0 means stay mounted indefinitely.")
+
+	flagSet.Uint64Var(&args.offset, "offset", 0, "encrypted partition offset inside sif image")
+	flagSet.Uint64Var(&args.limitedSize, "limitedSize", 0, "encrypted partition limited size inside sif image")
 
 	var dummyString string
 	flagSet.StringVar(&dummyString, "o", "", "For compatibility with mount(1), options can be also passed as a comma-separated list to -o on the end.")

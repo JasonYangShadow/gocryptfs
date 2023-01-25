@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
 	"log/syslog"
@@ -21,6 +22,7 @@ import (
 
 	"golang.org/x/crypto/chacha20poly1305"
 
+	"github.com/google/uuid"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
@@ -229,6 +231,124 @@ func setOpenFileLimit() {
 		tlog.Warn.Printf("Setting RLIMIT_NOFILE to %+v failed: %v", lim, err)
 		//         %+v output: "{Cur:4097 Max:4096}" ^
 	}
+}
+
+func initFuseFrontendApptainer(args *argContainer) (fs.InodeEmbedder, func(), []byte) {
+	confFile, err := configfile.CreateConf(&configfile.CreateArgs{
+		Filename:           args.config,
+		Password:           []byte(uuid.NewString()),
+		PlaintextNames:     args.plaintextnames,
+		LogN:               args.scryptn,
+		Creator:            "apptainer",
+		AESSIV:             args.aessiv,
+		Fido2CredentialID:  nil,
+		Fido2HmacSalt:      nil,
+		DeterministicNames: args.deterministic_names,
+		XChaCha20Poly1305:  args.xchacha,
+		LongNameMax:        args.longnamemax,
+	})
+	if err != nil {
+		exitcodes.Exit(err)
+	}
+	// Reconciliate CLI and config file arguments into a fusefrontend.Args struct
+	// that is passed to the filesystem implementation
+	cryptoBackend := cryptocore.BackendGoGCM
+	IVBits := contentenc.DefaultIVBits
+	if args.openssl {
+		cryptoBackend = cryptocore.BackendOpenSSL
+	}
+	if args.aessiv {
+		cryptoBackend = cryptocore.BackendAESSIV
+	}
+	if args.xchacha {
+		if args.openssl {
+			cryptoBackend = cryptocore.BackendXChaCha20Poly1305OpenSSL
+		} else {
+			cryptoBackend = cryptocore.BackendXChaCha20Poly1305
+		}
+		IVBits = chacha20poly1305.NonceSizeX * 8
+	}
+	// forceOwner implies allow_other, as documented.
+	// Set this early, so args.allow_other can be relied on below this point.
+	if args._forceOwner != nil {
+		args.allow_other = true
+	}
+	frontendArgs := fusefrontend.Args{
+		Cipherdir:          args.cipherdir,
+		PlaintextNames:     args.plaintextnames,
+		LongNames:          args.longnames,
+		ConfigCustom:       args._configCustom,
+		NoPrealloc:         args.noprealloc,
+		ForceOwner:         args._forceOwner,
+		Exclude:            args.exclude,
+		ExcludeWildcard:    args.excludeWildcard,
+		ExcludeFrom:        args.excludeFrom,
+		Suid:               args.suid,
+		KernelCache:        args.kernel_cache,
+		SharedStorage:      args.sharedstorage,
+		OneFileSystem:      args.one_file_system,
+		DeterministicNames: args.deterministic_names,
+	}
+
+	frontendArgs.PlaintextNames = confFile.IsFeatureFlagSet(configfile.FlagPlaintextNames)
+	frontendArgs.DeterministicNames = !confFile.IsFeatureFlagSet(configfile.FlagDirIV)
+	// Things that don't have to be in frontendArgs are only in args
+	args.longnamemax = confFile.LongNameMax
+	args.raw64 = confFile.IsFeatureFlagSet(configfile.FlagRaw64)
+	args.hkdf = confFile.IsFeatureFlagSet(configfile.FlagHKDF)
+	// Note: this will always return the non-openssl variant
+	cryptoBackend, err = confFile.ContentEncryption()
+	if err != nil {
+		tlog.Fatal.Printf("%v", err)
+		os.Exit(exitcodes.DeprecatedFS)
+	}
+	IVBits = cryptoBackend.NonceSize * 8
+	if cryptoBackend != cryptocore.BackendAESSIV && args.reverse {
+		tlog.Fatal.Printf("AES-SIV is required by reverse mode, but not enabled in the config file")
+		os.Exit(exitcodes.Usage)
+	}
+	// Upgrade to OpenSSL variant if requested
+	if args.openssl {
+		switch cryptoBackend {
+		case cryptocore.BackendGoGCM:
+			cryptoBackend = cryptocore.BackendOpenSSL
+		case cryptocore.BackendXChaCha20Poly1305:
+			cryptoBackend = cryptocore.BackendXChaCha20Poly1305OpenSSL
+		}
+	}
+
+	// If allow_other is set and we run as root, try to give newly created files to
+	// the right user.
+	if args.allow_other && os.Getuid() == 0 {
+		frontendArgs.PreserveOwner = true
+	}
+	// Init crypto backend
+	cCore := cryptocore.New(confFile.MasterKey, cryptoBackend, IVBits, args.hkdf)
+	cEnc := contentenc.New(cCore, contentenc.DefaultBS)
+	nameTransform := nametransform.New(cCore.EMECipher, frontendArgs.LongNames, args.longnamemax,
+		args.raw64, []string(args.badname), frontendArgs.DeterministicNames)
+	// Spawn fusefrontend
+	tlog.Debug.Printf("frontendArgs: %s", tlog.JSONDump(frontendArgs))
+	var rootNode fs.InodeEmbedder
+	if args.reverse {
+		if cryptoBackend != cryptocore.BackendAESSIV {
+			log.Panic("reverse mode must use AES-SIV, everything else is insecure")
+		}
+		rootNode = fusefrontend_reverse.NewRootNode(frontendArgs, cEnc, nameTransform)
+	} else {
+		rootNode = fusefrontend.NewRootNode(frontendArgs, cEnc, nameTransform)
+	}
+	// We have opened the socket early so that we cannot fail here after
+	// asking the user for the password
+	if args._ctlsockFd != nil {
+		go ctlsocksrv.Serve(args._ctlsockFd, rootNode.(ctlsocksrv.Interface))
+	}
+
+	confbytes, err := json.Marshal(confFile)
+	if err != nil {
+		exitcodes.Exit(err)
+	}
+	return rootNode, func() { cCore.Wipe() }, confbytes
 }
 
 // initFuseFrontend - initialize gocryptfs/internal/fusefrontend
