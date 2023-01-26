@@ -1,4 +1,4 @@
-package main
+package pkg
 
 import (
 	"reflect"
@@ -175,6 +175,7 @@ func TestParseCliOpts(t *testing.T) {
 	*/
 	for _, tc := range testcases {
 		o := parseCliOpts(tc.i)
+
 		if !reflect.DeepEqual(o, tc.o) {
 			t.Errorf("in=%v\nwant=%v\nhave=%v", tc.i, tc.o, o)
 		}

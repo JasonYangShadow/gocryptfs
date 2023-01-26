@@ -1,4 +1,4 @@
-package main
+package pkg
 
 import (
 	"io"
@@ -19,12 +19,12 @@ func convertToInternlArgContainer(in *ArgContainer) *argContainer {
 	return &arg
 }
 
-func GocryptfsEncrypt(dir io.Reader) (io.ReadCloser, []byte, func(), error) {
+func Encrypt(dir io.Reader) (io.ReadCloser, []byte, func(), error) {
 	arg := convertToInternlArgContainer(nil)
 	return mountEncrypt(dir, arg)
 }
 
-func GocryptfsDecrypt(sif io.Reader, offset, limitedSize int64) (io.ReadCloser, []byte, func(), error) {
+func Decrypt(sif io.Reader, offset, limitedSize int64) (io.ReadCloser, []byte, func(), error) {
 	arg := &ArgContainer{
 		Offset:      offset,
 		LimitedSize: limitedSize,

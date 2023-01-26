@@ -100,7 +100,8 @@ func CreateConf(args *CreateArgs) (*ConfFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	cf.Password = args.Password
+	cf.Password = make([]byte, len(args.Password))
+	copy(cf.Password, args.Password)
 	return cf, nil
 }
 
@@ -153,8 +154,9 @@ func createConf(args *CreateArgs) (*ConfFile, error) {
 	{
 		// Generate new random master key
 		key := cryptocore.RandBytes(cryptocore.KeyLen)
-		_ = copy(cf.MasterKey, key)
-		tlog.PrintMasterkeyReminder(key)
+		cf.MasterKey = make([]byte, cryptocore.KeyLen)
+		copy(cf.MasterKey, key)
+		// tlog.PrintMasterkeyReminder(key)
 		// Encrypt it using the password
 		// This sets ScryptObject and EncryptedKey
 		// Note: this looks at the FeatureFlags, so call it AFTER setting them.

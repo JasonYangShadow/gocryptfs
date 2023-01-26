@@ -1,7 +1,7 @@
 //go:build race
 // +build race
 
-package main
+package pkg
 
 func init() {
 	// adds " -race" to the output of "gocryptfs -version"
