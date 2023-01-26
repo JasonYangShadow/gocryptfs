@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"log/syslog"
 	"math"
@@ -42,6 +44,112 @@ import (
 // This can be used for cleanup and printing statistics.
 type AfterUnmounter interface {
 	AfterUnmount()
+}
+
+func mountEncrypt(in io.Reader, args *argContainer) (io.ReadCloser, []byte, func(), error) {
+	cipherDir, err := ioutil.TempDir(os.TempDir(), "gocryptfs-cipher-")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	plainDir, err := ioutil.TempDir(os.TempDir(), "gocryptfs-plain-")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	args.cipherdir = cipherDir
+	args.mountpoint = plainDir
+	args.plaintextnames = true
+	args.deterministic_names = true
+	fs, wipeKeys, conf := initFuseFrontendApptainer(args)
+	defer wipeKeys()
+	srv := initGoFuse(fs, args)
+	if x, ok := fs.(AfterUnmounter); ok {
+		defer x.AfterUnmount()
+	}
+
+	returnFunc := func() {
+		unmount(srv, args.mountpoint)
+		_ = os.RemoveAll(cipherDir)
+		_ = os.RemoveAll(plainDir)
+		debug.FreeOSMemory()
+	}
+
+	plainFile, err := os.CreateTemp(plainDir, "")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	filename := filepath.Base(plainFile.Name())
+	_, err = io.Copy(plainFile, in)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	encryptedFile := fmt.Sprintf("%s/%s", cipherDir, filename)
+	newfile, err := os.Open(encryptedFile)
+	if err != nil {
+		return nil, conf, nil, err
+	}
+
+	return newfile, conf, returnFunc, nil
+}
+
+func mountDecrypt(in io.Reader, args *argContainer) (io.ReadCloser, []byte, func(), error) {
+	cipherDir, err := ioutil.TempDir(os.TempDir(), "gocryptfs-cipher-")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	plainDir, err := ioutil.TempDir(os.TempDir(), "gocryptfs-plain-")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	args.cipherdir = cipherDir
+	args.mountpoint = plainDir
+	args.plaintextnames = true
+	args.deterministic_names = true
+	fs, wipeKeys, conf := initFuseFrontendApptainer(args)
+	defer wipeKeys()
+	srv := initGoFuse(fs, args)
+	if x, ok := fs.(AfterUnmounter); ok {
+		defer x.AfterUnmount()
+	}
+
+	returnFunc := func() {
+		unmount(srv, args.mountpoint)
+		_ = os.RemoveAll(cipherDir)
+		_ = os.RemoveAll(plainDir)
+		debug.FreeOSMemory()
+	}
+
+	cryptedFile, err := os.CreateTemp(cipherDir, "")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	filename := filepath.Base(cryptedFile.Name())
+	if inFile, ok := in.(*os.File); !ok {
+		return nil, nil, nil, fmt.Errorf("io.Reader in is not os.File type")
+	} else {
+		_, err := inFile.Seek(args.offset, 0)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		_, err = io.CopyN(cryptedFile, inFile, args.limitedSize)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+
+	decryptedFile := fmt.Sprintf("%s/%s", plainDir, filename)
+	newfile, err := os.Open(decryptedFile)
+	if err != nil {
+		return nil, conf, nil, err
+	}
+
+	return newfile, conf, returnFunc, nil
 }
 
 // doMount mounts an encrypted directory.
@@ -109,28 +217,15 @@ func doMount(args *argContainer) {
 			}
 		}()
 	}
-	var fs fs.InodeEmbedder
-	var srv *fuse.Server
-	var conf []byte
-	var wipeKeys func()
-	if args.apptainer {
-		fs, wipeKeys, conf = initFuseFrontendApptainer(args)
-		defer wipeKeys()
-		srv = initGoFuse(fs, args)
-		if x, ok := fs.(AfterUnmounter); ok {
-			defer x.AfterUnmount()
-		}
-		tlog.Debug.Printf("conf info, %s", conf)
-	} else {
-		// Initialize gocryptfs (read config file, ask for password, ...)
-		fs, wipeKeys := initFuseFrontend(args)
-		// Try to wipe secret keys from memory after unmount
-		defer wipeKeys()
-		// Initialize go-fuse FUSE server
-		srv = initGoFuse(fs, args)
-		if x, ok := fs.(AfterUnmounter); ok {
-			defer x.AfterUnmount()
-		}
+
+	// Initialize gocryptfs (read config file, ask for password, ...)
+	fs, wipeKeys := initFuseFrontend(args)
+	// Try to wipe secret keys from memory after unmount
+	defer wipeKeys()
+	// Initialize go-fuse FUSE server
+	srv := initGoFuse(fs, args)
+	if x, ok := fs.(AfterUnmounter); ok {
+		defer x.AfterUnmount()
 	}
 
 	tlog.Info.Println(tlog.ColorGreen + "Filesystem mounted and ready." + tlog.ColorReset)
