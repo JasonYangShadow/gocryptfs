@@ -94,22 +94,22 @@ func mountEncrypt(in io.Reader, args *argContainer) (io.ReadCloser, []byte, func
 	return newfile, conf, returnFunc, nil
 }
 
-func mountDecrypt(in io.Reader, args *argContainer) (io.ReadCloser, []byte, func(), error) {
+func mountDecrypt(in io.Reader, args *argContainer, conf []byte) (io.ReadCloser, func(), error) {
 	cipherDir, err := ioutil.TempDir(os.TempDir(), "gocryptfs-cipher-")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	plainDir, err := ioutil.TempDir(os.TempDir(), "gocryptfs-plain-")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	args.cipherdir = cipherDir
 	args.mountpoint = plainDir
 	args.plaintextnames = true
 	args.deterministic_names = true
-	fs, wipeKeys, conf := initFuseFrontendApptainer(args)
+	fs, wipeKeys := initFuseFrontendApptainerWithConf(args, conf)
 	defer wipeKeys()
 	srv := initGoFuse(fs, args)
 	if x, ok := fs.(AfterUnmounter); ok {
@@ -125,31 +125,31 @@ func mountDecrypt(in io.Reader, args *argContainer) (io.ReadCloser, []byte, func
 
 	cryptedFile, err := os.CreateTemp(cipherDir, "")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	filename := filepath.Base(cryptedFile.Name())
 	if inFile, ok := in.(*os.File); !ok {
-		return nil, nil, nil, fmt.Errorf("io.Reader in is not os.File type")
+		return nil, nil, fmt.Errorf("io.Reader in is not os.File type")
 	} else {
 		_, err := inFile.Seek(args.offset, 0)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 
 		_, err = io.CopyN(cryptedFile, inFile, args.limitedSize)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 	}
 
 	decryptedFile := fmt.Sprintf("%s/%s", plainDir, filename)
 	newfile, err := os.Open(decryptedFile)
 	if err != nil {
-		return nil, conf, nil, err
+		return nil, returnFunc, err
 	}
 
-	return newfile, conf, returnFunc, nil
+	return newfile, returnFunc, nil
 }
 
 // doMount mounts an encrypted directory.
@@ -340,6 +340,110 @@ func setOpenFileLimit() {
 		tlog.Warn.Printf("Setting RLIMIT_NOFILE to %+v failed: %v", lim, err)
 		//         %+v output: "{Cur:4097 Max:4096}" ^
 	}
+}
+
+func initFuseFrontendApptainerWithConf(args *argContainer, conf []byte) (fs.InodeEmbedder, func()) {
+	var confFile configfile.ConfFile
+	err := json.Unmarshal(conf, &confFile)
+	if err != nil {
+		exitcodes.Exit(err)
+	}
+
+	// Reconciliate CLI and config file arguments into a fusefrontend.Args struct
+	// that is passed to the filesystem implementation
+	cryptoBackend := cryptocore.BackendGoGCM
+	IVBits := contentenc.DefaultIVBits
+	if args.openssl {
+		cryptoBackend = cryptocore.BackendOpenSSL
+	}
+	if args.aessiv {
+		cryptoBackend = cryptocore.BackendAESSIV
+	}
+	if args.xchacha {
+		if args.openssl {
+			cryptoBackend = cryptocore.BackendXChaCha20Poly1305OpenSSL
+		} else {
+			cryptoBackend = cryptocore.BackendXChaCha20Poly1305
+		}
+		IVBits = chacha20poly1305.NonceSizeX * 8
+	}
+	// forceOwner implies allow_other, as documented.
+	// Set this early, so args.allow_other can be relied on below this point.
+	if args._forceOwner != nil {
+		args.allow_other = true
+	}
+	frontendArgs := fusefrontend.Args{
+		Cipherdir:          args.cipherdir,
+		PlaintextNames:     args.plaintextnames,
+		LongNames:          args.longnames,
+		ConfigCustom:       args._configCustom,
+		NoPrealloc:         args.noprealloc,
+		ForceOwner:         args._forceOwner,
+		Exclude:            args.exclude,
+		ExcludeWildcard:    args.excludeWildcard,
+		ExcludeFrom:        args.excludeFrom,
+		Suid:               args.suid,
+		KernelCache:        args.kernel_cache,
+		SharedStorage:      args.sharedstorage,
+		OneFileSystem:      args.one_file_system,
+		DeterministicNames: args.deterministic_names,
+	}
+
+	frontendArgs.PlaintextNames = confFile.IsFeatureFlagSet(configfile.FlagPlaintextNames)
+	frontendArgs.DeterministicNames = !confFile.IsFeatureFlagSet(configfile.FlagDirIV)
+	// Things that don't have to be in frontendArgs are only in args
+	args.longnamemax = confFile.LongNameMax
+	args.raw64 = confFile.IsFeatureFlagSet(configfile.FlagRaw64)
+	args.hkdf = confFile.IsFeatureFlagSet(configfile.FlagHKDF)
+	// Note: this will always return the non-openssl variant
+	cryptoBackend, err = confFile.ContentEncryption()
+	if err != nil {
+		tlog.Fatal.Printf("%v", err)
+		os.Exit(exitcodes.DeprecatedFS)
+	}
+	IVBits = cryptoBackend.NonceSize * 8
+	if cryptoBackend != cryptocore.BackendAESSIV && args.reverse {
+		tlog.Fatal.Printf("AES-SIV is required by reverse mode, but not enabled in the config file")
+		os.Exit(exitcodes.Usage)
+	}
+	// Upgrade to OpenSSL variant if requested
+	if args.openssl {
+		switch cryptoBackend {
+		case cryptocore.BackendGoGCM:
+			cryptoBackend = cryptocore.BackendOpenSSL
+		case cryptocore.BackendXChaCha20Poly1305:
+			cryptoBackend = cryptocore.BackendXChaCha20Poly1305OpenSSL
+		}
+	}
+
+	// If allow_other is set and we run as root, try to give newly created files to
+	// the right user.
+	if args.allow_other && os.Getuid() == 0 {
+		frontendArgs.PreserveOwner = true
+	}
+	// Init crypto backend
+	cCore := cryptocore.New(confFile.MasterKey, cryptoBackend, IVBits, args.hkdf)
+	cEnc := contentenc.New(cCore, contentenc.DefaultBS)
+	nameTransform := nametransform.New(cCore.EMECipher, frontendArgs.LongNames, args.longnamemax,
+		args.raw64, []string(args.badname), frontendArgs.DeterministicNames)
+	// Spawn fusefrontend
+	tlog.Debug.Printf("frontendArgs: %s", tlog.JSONDump(frontendArgs))
+	var rootNode fs.InodeEmbedder
+	if args.reverse {
+		if cryptoBackend != cryptocore.BackendAESSIV {
+			log.Panic("reverse mode must use AES-SIV, everything else is insecure")
+		}
+		rootNode = fusefrontend_reverse.NewRootNode(frontendArgs, cEnc, nameTransform)
+	} else {
+		rootNode = fusefrontend.NewRootNode(frontendArgs, cEnc, nameTransform)
+	}
+	// We have opened the socket early so that we cannot fail here after
+	// asking the user for the password
+	if args._ctlsockFd != nil {
+		go ctlsocksrv.Serve(args._ctlsockFd, rootNode.(ctlsocksrv.Interface))
+	}
+
+	return rootNode, func() { cCore.Wipe() }
 }
 
 func initFuseFrontendApptainer(args *argContainer) (fs.InodeEmbedder, func(), []byte) {
@@ -711,7 +815,7 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
 	// All FUSE file and directory create calls carry explicit permission
 	// information. We need an unrestricted umask to create the files and
 	// directories with the requested permissions.
-	syscall.Umask(0000)
+	syscall.Umask(0o000)
 
 	return srv
 }

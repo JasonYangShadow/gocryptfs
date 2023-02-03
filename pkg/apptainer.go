@@ -24,12 +24,12 @@ func Encrypt(dir io.Reader) (io.ReadCloser, []byte, func(), error) {
 	return mountEncrypt(dir, arg)
 }
 
-func Decrypt(sif io.Reader, offset, limitedSize int64) (io.ReadCloser, []byte, func(), error) {
+func Decrypt(sif io.Reader, offset, limitedSize int64, conf []byte) (io.ReadCloser, func(), error) {
 	arg := &ArgContainer{
 		Offset:      offset,
 		LimitedSize: limitedSize,
 	}
 
 	internalArg := convertToInternlArgContainer(arg)
-	return mountDecrypt(sif, internalArg)
+	return mountDecrypt(sif, internalArg, conf)
 }
