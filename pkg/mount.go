@@ -471,7 +471,7 @@ func initFuseFrontendApptainer(args *argContainer) (fs.InodeEmbedder, func(), []
 	if err != nil {
 		exitcodes.Exit(err)
 	}
-	fmt.Printf("---- encyrpt pass: %s, encrypted key: %s\n", pass, string(confFile.EncryptedKey))
+	fmt.Printf("---- encyrpt pass: %s\n", pass)
 	// Reconciliate CLI and config file arguments into a fusefrontend.Args struct
 	// that is passed to the filesystem implementation
 	cryptoBackend := cryptocore.BackendGoGCM
