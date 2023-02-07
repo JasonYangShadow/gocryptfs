@@ -113,7 +113,7 @@ func (ck *fsckObj) dir(relPath string) {
 			continue
 		}
 		filetype := st.Mode & syscall.S_IFMT
-		//fmt.Printf("  %q %x\n", entry.Name, entry.Mode)
+		// fmt.Printf("  %q %x\n", entry.Name, entry.Mode)
 		switch filetype {
 		case syscall.S_IFDIR:
 			ck.dir(nextPath)

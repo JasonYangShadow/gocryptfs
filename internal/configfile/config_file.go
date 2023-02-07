@@ -59,8 +59,7 @@ type ConfFile struct {
 	// Filename is the name of the config file. Not exported to JSON.
 	filename string
 	// password
-	Password  []byte
-	MasterKey []byte
+	Password []byte
 }
 
 // CreateArgs exists because the argument list to Create became too long.
@@ -85,11 +84,6 @@ func Create(args *CreateArgs) error {
 	cf, err := createConf(args)
 	if err != nil {
 		return err
-	}
-
-	// for original mode, we will also clean master key
-	for i := range cf.MasterKey {
-		cf.MasterKey[i] = 0
 	}
 	// Write file to disk
 	return cf.WriteFile()
@@ -154,8 +148,6 @@ func createConf(args *CreateArgs) (*ConfFile, error) {
 	{
 		// Generate new random master key
 		key := cryptocore.RandBytes(cryptocore.KeyLen)
-		cf.MasterKey = make([]byte, cryptocore.KeyLen)
-		copy(cf.MasterKey, key)
 		// tlog.PrintMasterkeyReminder(key)
 		// Encrypt it using the password
 		// This sets ScryptObject and EncryptedKey
@@ -296,7 +288,7 @@ func (cf *ConfFile) WriteFile() error {
 	}
 	tmp := cf.filename + ".tmp"
 	// 0400 permissions: gocryptfs.conf should be kept secret and never be written to.
-	fd, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0400)
+	fd, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o400)
 	if err != nil {
 		return err
 	}

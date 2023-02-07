@@ -424,7 +424,12 @@ func initFuseFrontendApptainerWithConf(args *argContainer, conf []byte) (fs.Inod
 		frontendArgs.PreserveOwner = true
 	}
 	// Init crypto backend
-	cCore := cryptocore.New(confFile.MasterKey, cryptoBackend, IVBits, args.hkdf)
+	masterKey, err := confFile.DecryptMasterKey(confFile.Password)
+	if err != nil {
+		tlog.Fatal.Printf("%v", err)
+		os.Exit(exitcodes.Usage)
+	}
+	cCore := cryptocore.New(masterKey, cryptoBackend, IVBits, args.hkdf)
 	cEnc := contentenc.New(cCore, contentenc.DefaultBS)
 	nameTransform := nametransform.New(cCore.EMECipher, frontendArgs.LongNames, args.longnamemax,
 		args.raw64, []string(args.badname), frontendArgs.DeterministicNames)
@@ -449,9 +454,10 @@ func initFuseFrontendApptainerWithConf(args *argContainer, conf []byte) (fs.Inod
 }
 
 func initFuseFrontendApptainer(args *argContainer) (fs.InodeEmbedder, func(), []byte) {
+	pass := uuid.NewString()
 	confFile, err := configfile.CreateConf(&configfile.CreateArgs{
 		Filename:           args.config,
-		Password:           []byte(uuid.NewString()),
+		Password:           []byte(pass),
 		PlaintextNames:     args.plaintextnames,
 		LogN:               args.scryptn,
 		Creator:            "apptainer",
@@ -465,6 +471,7 @@ func initFuseFrontendApptainer(args *argContainer) (fs.InodeEmbedder, func(), []
 	if err != nil {
 		exitcodes.Exit(err)
 	}
+	fmt.Printf("---- encyrpt pass: %s, encrypted key: %s\n", pass, string(confFile.EncryptedKey))
 	// Reconciliate CLI and config file arguments into a fusefrontend.Args struct
 	// that is passed to the filesystem implementation
 	cryptoBackend := cryptocore.BackendGoGCM
@@ -538,7 +545,12 @@ func initFuseFrontendApptainer(args *argContainer) (fs.InodeEmbedder, func(), []
 		frontendArgs.PreserveOwner = true
 	}
 	// Init crypto backend
-	cCore := cryptocore.New(confFile.MasterKey, cryptoBackend, IVBits, args.hkdf)
+	masterKey, err := confFile.DecryptMasterKey(confFile.Password)
+	if err != nil {
+		tlog.Fatal.Printf("%v", err)
+		os.Exit(exitcodes.Usage)
+	}
+	cCore := cryptocore.New(masterKey, cryptoBackend, IVBits, args.hkdf)
 	cEnc := contentenc.New(cCore, contentenc.DefaultBS)
 	nameTransform := nametransform.New(cCore.EMECipher, frontendArgs.LongNames, args.longnamemax,
 		args.raw64, []string(args.badname), frontendArgs.DeterministicNames)
@@ -809,7 +821,6 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
 	fmt.Printf("fs mount, mountpoint: %s, opts: %v", args.mountpoint, fuseOpts)
 	srv, err := fs.Mount(args.mountpoint, rootNode, fuseOpts)
 	if err != nil {
-		fmt.Printf("------------------1 err: %s", err.Error())
 		tlog.Fatal.Printf("fs.Mount failed: %s", strings.TrimSpace(err.Error()))
 		if runtime.GOOS == "darwin" {
 			tlog.Info.Printf("Maybe you should run: /Library/Filesystems/osxfuse.fs/Contents/Resources/load_osxfuse")
