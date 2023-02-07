@@ -62,6 +62,7 @@ func mountEncrypt(in io.Reader, args *argContainer) (io.ReadCloser, []byte, func
 	args.plaintextnames = true
 	args.deterministic_names = true
 	fs, wipeKeys, conf := initFuseFrontendApptainer(args)
+	fmt.Printf("------ encrypt conf: %s\n", string(conf))
 	defer wipeKeys()
 	srv := initGoFuse(fs, args)
 	if x, ok := fs.(AfterUnmounter); ok {
@@ -109,9 +110,11 @@ func mountDecrypt(in io.Reader, args *argContainer, conf []byte) (io.ReadCloser,
 	args.mountpoint = plainDir
 	args.plaintextnames = true
 	args.deterministic_names = true
+	fmt.Printf("-----------decrypt conf: %s", string(conf))
 	fs, wipeKeys := initFuseFrontendApptainerWithConf(args, conf)
 	defer wipeKeys()
 	srv := initGoFuse(fs, args)
+	fmt.Printf("------ init go fuse: %v", srv)
 	if x, ok := fs.(AfterUnmounter); ok {
 		defer x.AfterUnmount()
 	}
@@ -348,7 +351,6 @@ func initFuseFrontendApptainerWithConf(args *argContainer, conf []byte) (fs.Inod
 	if err != nil {
 		exitcodes.Exit(err)
 	}
-
 	// Reconciliate CLI and config file arguments into a fusefrontend.Args struct
 	// that is passed to the filesystem implementation
 	cryptoBackend := cryptocore.BackendGoGCM
@@ -803,8 +805,11 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
 		tlog.Debug.Printf("Adding -ko mount options: %v", parts)
 		mOpts.Options = append(mOpts.Options, parts...)
 	}
+
+	fmt.Printf("fs mount, mountpoint: %s, opts: %v", args.mountpoint, fuseOpts)
 	srv, err := fs.Mount(args.mountpoint, rootNode, fuseOpts)
 	if err != nil {
+		fmt.Printf("------------------1 err: %s", err.Error())
 		tlog.Fatal.Printf("fs.Mount failed: %s", strings.TrimSpace(err.Error()))
 		if runtime.GOOS == "darwin" {
 			tlog.Info.Printf("Maybe you should run: /Library/Filesystems/osxfuse.fs/Contents/Resources/load_osxfuse")
